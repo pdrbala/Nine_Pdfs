@@ -26,7 +26,16 @@
     runSearches
   } from '$lib/engine';
   import { getParsedSummaryParts } from '$lib/parser';
-  import { loadHistory, loadSettings, persistHistory, persistSettings, pushHistory } from '$lib/persistence';
+  import {
+    loadHistory,
+    loadSearchCache,
+    loadSettings,
+    persistHistory,
+    persistSearchCache,
+    persistSettings,
+    pushHistory
+  } from '$lib/persistence';
+  import type { CachedAmazonCheckStatus } from '$lib/persistence';
   import type {
     ManualSearchEntry,
     ParsedCitation,
@@ -48,7 +57,7 @@
   let rateLimits: Record<string, number> = {};
   let downloadingUrls: string[] = [];
   let amazonReferenceBook: AmazonBook | null = null;
-  let amazonCheckStatus: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+  let amazonCheckStatus: CachedAmazonCheckStatus | 'loading' = 'idle';
   let amazonCheckError = '';
   let amazonCheckRunId = 0;
   let toastMessage = '';
@@ -147,7 +156,23 @@
     amazonCheckError = '';
   }
 
-  async function runAmazonReferenceCheck(citation: ParsedCitation): Promise<void> {
+  function getAmazonCheckCacheSnapshot(): {
+    amazonReferenceBook: AmazonBook | null;
+    amazonCheckStatus: CachedAmazonCheckStatus;
+    amazonCheckError: string;
+  } {
+    return {
+      amazonReferenceBook,
+      amazonCheckStatus: amazonCheckStatus === 'loading' ? 'idle' : amazonCheckStatus,
+      amazonCheckError
+    };
+  }
+
+  async function runAmazonReferenceCheck(citation: ParsedCitation): Promise<{
+    amazonReferenceBook: AmazonBook | null;
+    amazonCheckStatus: CachedAmazonCheckStatus;
+    amazonCheckError: string;
+  } | null> {
     const runId = ++amazonCheckRunId;
     const amazonQuery = buildAmazonReferenceQuery(citation, rawInput);
 
@@ -169,21 +194,23 @@
       });
 
       if (runId !== amazonCheckRunId) {
-        return;
+        return null;
       }
 
       amazonReferenceBook = response.book;
       amazonCheckStatus = response.book ? 'ready' : 'error';
       amazonCheckError = response.warnings.join(' · ') || '';
+      return getAmazonCheckCacheSnapshot();
     } catch (unknownError) {
       if (runId !== amazonCheckRunId) {
-        return;
+        return null;
       }
 
       amazonReferenceBook = null;
       amazonCheckStatus = 'error';
       amazonCheckError =
         unknownError instanceof Error ? unknownError.message : 'Amazon indisponível';
+      return getAmazonCheckCacheSnapshot();
     }
   }
 
@@ -214,6 +241,38 @@
       return;
     }
 
+    const cachedSearch = settings.useCachedSearch ? loadSearchCache(rawInput, settings) : null;
+    if (cachedSearch) {
+      const cachedRawInput = rawInput;
+      const cachedSettings = { ...settings };
+      parsedCitation = cachedSearch.parsedCitation;
+      results = cachedSearch.results;
+      sourceStatus = cachedSearch.sourceStatus;
+      amazonReferenceBook = cachedSearch.amazonReferenceBook;
+      amazonCheckStatus = cachedSearch.amazonCheckStatus;
+      amazonCheckError = cachedSearch.amazonCheckError;
+      rateLimits = {};
+      isSearching = false;
+      history = pushHistory(history, rawInput);
+      persistHistory(history);
+      if (cachedSearch.amazonCheckStatus === 'idle') {
+        void runAmazonReferenceCheck(cachedSearch.parsedCitation).then((amazonCheckSnapshot) => {
+          if (!amazonCheckSnapshot) {
+            return;
+          }
+
+          persistSearchCache(cachedRawInput, cachedSettings, {
+            parsedCitation: cachedSearch.parsedCitation,
+            results: cachedSearch.results,
+            sourceStatus: cachedSearch.sourceStatus,
+            ...amazonCheckSnapshot
+          });
+        });
+      }
+      showToast('Busca carregada do cache.');
+      return;
+    }
+
     isSearching = true;
     results = [];
     sourceStatus = {};
@@ -237,9 +296,9 @@
 
     history = pushHistory(history, rawInput);
     persistHistory(history);
-    void runAmazonReferenceCheck(citation);
+    const amazonCheckTask = runAmazonReferenceCheck(citation);
 
-    await runSearches(citation, settings, {
+    const freshResults = await runSearches(citation, settings, {
       onStart(adapters) {
         isSearching = true;
         results = [];
@@ -265,6 +324,19 @@
       onFinish() {
         isSearching = false;
       }
+    });
+
+    results = freshResults;
+    const amazonCheckSnapshot = await amazonCheckTask;
+    if (!amazonCheckSnapshot) {
+      return;
+    }
+
+    persistSearchCache(rawInput, settings, {
+      parsedCitation: citation,
+      results: freshResults,
+      sourceStatus,
+      ...amazonCheckSnapshot
     });
   }
 
@@ -547,6 +619,17 @@
       </button>
       <button class="ghost-btn" type="button" on:click={handleClear}>Limpar</button>
     </div>
+
+    <label class="check-row search-cache-row" for="useCachedSearch">
+      <input
+        id="useCachedSearch"
+        class="check-input"
+        type="checkbox"
+        bind:checked={settings.useCachedSearch}
+        on:change={handleSettingsInput}
+      />
+      <span>Usar busca cacheada</span>
+    </label>
 
     {#if parseError}
       <div class="error-strip" aria-live="polite">{parseError}</div>

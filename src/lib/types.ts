@@ -105,6 +105,7 @@ export interface SearchSettings {
   coreApiKey: string;
   prioritizeReadyPdf: boolean;
   convertEpubToPdfByDefault: boolean;
+  useCachedSearch: boolean;
   searchMode: SearchMode;
 }
 

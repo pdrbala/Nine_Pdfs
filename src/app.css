@@ -649,6 +649,10 @@
       line-height: 1.5;
     }
 
+    .search-cache-row {
+      margin: 10px 0 0;
+    }
+
     .check-input {
       width: auto;
       min-height: auto;

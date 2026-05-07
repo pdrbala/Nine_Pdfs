@@ -2,6 +2,7 @@ import type { SearchSettings } from '$lib/types';
 
 export const HISTORY_KEY = 'pdf_locator_history_v1';
 export const SETTINGS_KEY = 'pdf_locator_settings_v1';
+export const SEARCH_CACHE_KEY = 'pdf_locator_search_cache_v1';
 export const RATE_LIMIT_DEFAULT_SECONDS = 60;
 export const DIRECT_RESULTS_LIMIT = 5;
 export const DEFAULT_GEMINI_API_KEY = 'AIzaSyCUIo8sOUSzxlZxItoo4xODQQCKBpLo4nU';
@@ -11,6 +12,7 @@ export const DEFAULT_SETTINGS: SearchSettings = {
   coreApiKey: '',
   prioritizeReadyPdf: true,
   convertEpubToPdfByDefault: true,
+  useCachedSearch: true,
   searchMode: 'complete'
 };
 
