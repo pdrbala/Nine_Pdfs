@@ -30,18 +30,16 @@ export const FULLTEXT_SOURCE_IDS = [
   'eric'
 ] as const;
 
-export const COMPLEMENTARY_SOURCE_IDS = ['internet_archive', 'open_library', 'project_gutenberg'] as const;
-
-export const FOCUSED_SEARCH_METADATA_SOURCE_IDS = ['google_books', 'crossref'] as const;
-export const FOCUSED_SEARCH_CATALOG_SOURCE_IDS = [
+export const COMPLEMENTARY_SOURCE_IDS = [
   'internet_archive',
   'open_library',
-  'project_gutenberg'
+  'project_gutenberg',
+  'annas_archive'
 ] as const;
-export const FOCUSED_SEARCH_SOURCE_IDS = [
-  ...FOCUSED_SEARCH_METADATA_SOURCE_IDS,
-  ...FOCUSED_SEARCH_CATALOG_SOURCE_IDS
-] as const;
+
+export const FOCUSED_SEARCH_METADATA_SOURCE_IDS = [] as const;
+export const FOCUSED_SEARCH_CATALOG_SOURCE_IDS = ['annas_archive'] as const;
+export const FOCUSED_SEARCH_SOURCE_IDS = ['annas_archive'] as const;
 
 export const DIRECT_SOURCE_PRIORITY = [
   'unpaywall',
@@ -60,6 +58,7 @@ export const DIRECT_SOURCE_PRIORITY = [
   'crossref',
   'project_gutenberg',
   'internet_archive',
+  'annas_archive',
   'open_library',
   'eric'
 ] as const;
@@ -85,6 +84,7 @@ export const SOURCE_CONFIDENCE_WEIGHTS: Record<string, number> = {
   project_gutenberg: 0.12,
   base: 0.1,
   internet_archive: 0.09,
+  annas_archive: 0.09,
   open_library: 0.08,
   eric: 0.08
 };

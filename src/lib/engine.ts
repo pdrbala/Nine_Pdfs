@@ -10,6 +10,7 @@ import {
   METADATA_SOURCE_IDS,
   RATE_LIMIT_DEFAULT_SECONDS
 } from '$lib/constants';
+import { fetchAnnasSearch, type AnnasResult } from '$lib/annas';
 import {
   attachSearchMetadata,
   buildCitationFromParts,
@@ -94,7 +95,8 @@ const SOURCE_NAME_TO_ID: Record<string, string> = {
   Zenodo: 'zenodo',
   'Senado Federal': 'senado_federal',
   'Marxists Internet Archive': 'marxists_archive',
-  HAL: 'hal'
+  HAL: 'hal',
+  "Anna's Archive": 'annas_archive'
 };
 
 export const pdfProbeCache = new Map<string, Promise<PdfProbeResult>>();
@@ -202,6 +204,7 @@ function mergeResultPair(existing: SearchResult, incoming: SearchResult): Search
     pdfUrl: preferred.pdfUrl || fallback.pdfUrl || null,
     epubUrl: preferred.epubUrl || fallback.epubUrl || null,
     pageUrl: preferred.pageUrl || fallback.pageUrl || preferred.url || fallback.url || null,
+    coverUrl: preferred.coverUrl || fallback.coverUrl || null,
     materialType:
       preferred.materialType !== 'unknown' ? preferred.materialType : fallback.materialType,
     pdfStatus:
@@ -1030,6 +1033,7 @@ export function buildResult(
     pdfUrl: normalizeWhitespace(String(partial.pdfUrl || '')) || null,
     epubUrl: normalizeWhitespace(String(partial.epubUrl || '')) || null,
     pageUrl: normalizeWhitespace(String(partial.pageUrl || partial.pdfUrl || partial.epubUrl || '')) || null,
+    coverUrl: normalizeWhitespace(String(partial.coverUrl || '')) || null,
     materialType: inferMaterialType(citation, source, partial),
     pdfStatus: (partial.pdfStatus as PdfStatus) || (partial.pdfUrl ? 'unknown' : 'none'),
     pdfStatusReason: normalizeWhitespace(String(partial.pdfStatusReason || '')),
@@ -1423,6 +1427,10 @@ async function hardenAdapterResponse(
   citation: ParsedCitation,
   response: SearchAdapterResponse
 ): Promise<SearchAdapterResponse> {
+  if (response.sourceId === 'annas_archive') {
+    return response;
+  }
+
   if (response.tier !== 1 || !response.results.length) {
     return finalizeAdapterResponse(citation, response);
   }
@@ -1730,6 +1738,7 @@ async function searchInternetArchive(
           pdfUrl: files.pdfUrl,
           epubUrl: files.epubUrl,
           pageUrl: identifier ? `https://archive.org/details/${identifier}` : null,
+          coverUrl: identifier ? `https://archive.org/services/img/${encodeURIComponent(identifier)}` : null,
           materialType: 'book'
         });
       })
@@ -1802,6 +1811,9 @@ async function searchProjectGutenberg(
       const htmlEntry = Object.entries(formats).find(([mime, url]) =>
         /text\/html/i.test(mime) && typeof url === 'string'
       );
+      const coverEntry = Object.entries(formats).find(([mime, url]) =>
+        /^image\//i.test(mime) && typeof url === 'string'
+      );
       const authors = Array.isArray(item.authors)
         ? item.authors.map((author: any) => normalizeWhitespace(String(author.name || ''))).filter(Boolean)
         : [];
@@ -1816,6 +1828,7 @@ async function searchProjectGutenberg(
         year: Array.isArray(item.authors) ? item.authors[0]?.death_year || item.authors[0]?.birth_year : null,
         epubUrl: epubEntry ? String(epubEntry[1]) : null,
         pageUrl: item.id ? `https://www.gutenberg.org/ebooks/${item.id}` : htmlEntry ? String(htmlEntry[1]) : null,
+        coverUrl: coverEntry ? String(coverEntry[1]) : null,
         materialType: 'book',
         categories: Array.isArray(item.bookshelves) ? item.bookshelves : [],
         extra: {
@@ -1943,6 +1956,10 @@ async function searchGoogleBooks(
             info.canonicalVolumeLink ||
             item.selfLink ||
             null,
+          coverUrl:
+            info.imageLinks?.thumbnail ||
+            info.imageLinks?.smallThumbnail ||
+            null,
           materialType: 'book',
           categories: Array.isArray(info.categories) ? info.categories : [],
           extra: {
@@ -1996,6 +2013,13 @@ async function searchOpenLibrary(
             ? `https://openlibrary.org${workId}`
             : null;
 
+      const coverUrl =
+        typeof doc.cover_i === 'number'
+          ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`
+          : doc.cover_edition_key
+            ? `https://covers.openlibrary.org/b/olid/${doc.cover_edition_key}-M.jpg`
+            : null;
+
       return buildResult(citation, source, {
         title: doc.title,
         author: Array.isArray(doc.author_name) ? doc.author_name.join(', ') : '',
@@ -2007,6 +2031,7 @@ async function searchOpenLibrary(
             : workId
               ? `https://openlibrary.org${workId}`
               : readUrl,
+        coverUrl,
         materialType: 'book'
       });
     })
@@ -2845,6 +2870,97 @@ function buildBrazilianRepositoryPdfSearchUrl(citation: ParsedCitation): string 
   return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
 }
 
+function buildAnnasManualUrl(citation: ParsedCitation): string {
+  const query = buildSearchQuery(citation, {
+    includeSubtitle: false,
+    includeAuthor: true,
+    authorMode: 'last',
+    preferMainTitle: true
+  });
+  const params = new URLSearchParams({ q: query });
+  return `https://annas-archive.gl/search?${params.toString()}`;
+}
+
+function annasMaterialType(annas: AnnasResult): MaterialType {
+  const blob = `${annas.contentType || ''} ${annas.fileFormat || ''}`.toLowerCase();
+  if (/thesis|dissert|tese/.test(blob)) return 'thesis';
+  if (/article|journal|paper/.test(blob)) return 'article';
+  if (/comic/.test(blob)) return 'book';
+  if (/report/.test(blob)) return 'report';
+  return 'book';
+}
+
+const ANNAS_RESULTS_LIMIT = 50;
+
+async function searchAnnasArchive(
+  citation: ParsedCitation,
+  _settings: SearchSettings
+): Promise<SearchAdapterResponse> {
+  const source = "Anna's Archive";
+  const sourceId = 'annas_archive';
+  const manualUrl = buildAnnasManualUrl(citation);
+  const response = createBaseResponse(source, sourceId, 1, manualUrl);
+
+  const query = buildSearchQuery(citation, {
+    includeSubtitle: false,
+    includeAuthor: true,
+    authorMode: 'last',
+    preferMainTitle: true
+  });
+
+  if (!query.trim()) {
+    response.status = 'no_results';
+    return response;
+  }
+
+  const annasResults = await fetchAnnasSearch(query);
+
+  const built = annasResults
+    .map((entry) => {
+      const reasonBits = [
+        entry.fileFormat ? entry.fileFormat.toUpperCase() : null,
+        entry.size || null,
+        entry.language || null,
+        entry.year || null
+      ].filter(Boolean) as string[];
+
+      return buildResult(citation, source, {
+        sourceId,
+        title: entry.title || citation.title,
+        author: entry.authors,
+        year: entry.year || null,
+        pageUrl: entry.detailUrl,
+        pdfUrl: null,
+        epubUrl: null,
+        coverUrl: entry.coverUrl,
+        materialType: annasMaterialType(entry),
+        pdfStatus: 'unknown' as PdfStatus,
+        pdfStatusReason: reasonBits.length
+          ? `Anna's Archive · ${reasonBits.join(' · ')}`
+          : "Selecionar mirror em Anna's Archive",
+        sourceKind: 'catalog' as SearchSourceKind,
+        abstract: entry.description || null,
+        confidence: 0.85,
+        extra: {
+          annasMd5: entry.md5,
+          annasFileFormat: entry.fileFormat,
+          annasSize: entry.size,
+          annasLanguage: entry.language,
+          annasPublisher: entry.publisher,
+          annasFilePath: entry.filePath,
+          annasContentType: entry.contentType
+        }
+      });
+    })
+    .filter(hasDownloadOrPage);
+
+  response.results = dedupeResults(built).slice(0, ANNAS_RESULTS_LIMIT);
+  if (!response.results.length) {
+    response.status = 'no_results';
+  }
+  return response;
+}
+
 const directAdapters: SearchAdapter[] = [
   {
     source: 'Google Books',
@@ -2985,6 +3101,14 @@ const directAdapters: SearchAdapter[] = [
     tier: 1,
     manualUrl: (citation) => makeManualUrl('https://openlibrary.org/search', { q: buildSearchQuery(citation) }),
     search: searchOpenLibrary
+  },
+  {
+    source: "Anna's Archive",
+    sourceId: 'annas_archive',
+    tier: 1,
+    caption: 'Catálogo agregado de livros e artigos',
+    manualUrl: buildAnnasManualUrl,
+    search: searchAnnasArchive
   }
 ];
 

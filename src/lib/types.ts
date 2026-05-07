@@ -76,6 +76,7 @@ export interface SearchResult {
   pdfUrl: string | null;
   epubUrl?: string | null;
   pageUrl: string | null;
+  coverUrl?: string | null;
   materialType: MaterialType;
   pdfStatus: PdfStatus;
   pdfStatusReason: string;

@@ -2,6 +2,17 @@
   import { onMount } from 'svelte';
   import '../app.css';
   import { DEFAULT_SETTINGS } from '$lib/constants';
+  import {
+    createAmazonHtmlEndpointFetcher,
+    scrapeAmazonBookFromSearch,
+    type AmazonBook
+  } from '$lib/amazon';
+  import {
+    buildAmazonReferenceQuery,
+    createPendingAmazonCheck,
+    scoreAmazonMatch,
+    type AmazonCheckScore
+  } from '$lib/amazon-check';
   import EpubConverter from '$lib/components/EpubConverter.svelte';
   import { downloadBlob, downloadEpub, submitEpubUrlConversion } from '$lib/conversion/client';
   import { DEFAULT_EPUB_TO_PDF_OPTIONS } from '$lib/conversion/types';
@@ -36,6 +47,10 @@
   let settings: SearchSettings = { ...DEFAULT_SETTINGS };
   let rateLimits: Record<string, number> = {};
   let downloadingUrls: string[] = [];
+  let amazonReferenceBook: AmazonBook | null = null;
+  let amazonCheckStatus: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+  let amazonCheckError = '';
+  let amazonCheckRunId = 0;
   let toastMessage = '';
   let toastVisible = false;
   let toastTimer: number | null = null;
@@ -118,9 +133,57 @@
     results = [];
     sourceStatus = {};
     rateLimits = {};
+    resetAmazonCheck();
     if (countdownTimer !== null) {
       window.clearInterval(countdownTimer);
       countdownTimer = null;
+    }
+  }
+
+  function resetAmazonCheck(): void {
+    amazonCheckRunId += 1;
+    amazonReferenceBook = null;
+    amazonCheckStatus = 'idle';
+    amazonCheckError = '';
+  }
+
+  async function runAmazonReferenceCheck(citation: ParsedCitation): Promise<void> {
+    const runId = ++amazonCheckRunId;
+    const amazonQuery = buildAmazonReferenceQuery(citation, rawInput);
+
+    amazonReferenceBook = null;
+    amazonCheckStatus = 'loading';
+    amazonCheckError = '';
+
+    try {
+      const response = await scrapeAmazonBookFromSearch(amazonQuery || rawInput, {
+        marketplace: 'com.br',
+        fetcher: createAmazonHtmlEndpointFetcher(fetch),
+        proxyChain: [],
+        maxCandidates: 8,
+        includeSponsored: false,
+        timeoutMs: 12000,
+        requestHeaders: {
+          'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8'
+        }
+      });
+
+      if (runId !== amazonCheckRunId) {
+        return;
+      }
+
+      amazonReferenceBook = response.book;
+      amazonCheckStatus = response.book ? 'ready' : 'error';
+      amazonCheckError = response.warnings.join(' · ') || '';
+    } catch (unknownError) {
+      if (runId !== amazonCheckRunId) {
+        return;
+      }
+
+      amazonReferenceBook = null;
+      amazonCheckStatus = 'error';
+      amazonCheckError =
+        unknownError instanceof Error ? unknownError.message : 'Amazon indisponível';
     }
   }
 
@@ -151,23 +214,30 @@
       return;
     }
 
+    isSearching = true;
+    results = [];
+    sourceStatus = {};
+
     let citation = parsedCitation;
 
-    try {
-      const aiParsed = await parseCitationWithGemini(rawInput, citation);
-      if (aiParsed?.title) {
-        citation = aiParsed;
-        parsedCitation = aiParsed;
-        if (aiParsed._searchEnriched && aiParsed._searchCandidateSource) {
-          showToast(`Referência reforçada com catálogo: ${aiParsed._searchCandidateSource}.`);
+    if (settings.searchMode !== 'focused') {
+      try {
+        const aiParsed = await parseCitationWithGemini(rawInput, citation);
+        if (aiParsed?.title) {
+          citation = aiParsed;
+          parsedCitation = aiParsed;
+          if (aiParsed._searchEnriched && aiParsed._searchCandidateSource) {
+            showToast(`Referência reforçada com catálogo: ${aiParsed._searchCandidateSource}.`);
+          }
         }
+      } catch {
+        showToast('Gemini indisponível agora; usando parser local.');
       }
-    } catch {
-      showToast('Gemini indisponível agora; usando parser local.');
     }
 
     history = pushHistory(history, rawInput);
     persistHistory(history);
+    void runAmazonReferenceCheck(citation);
 
     await runSearches(citation, settings, {
       onStart(adapters) {
@@ -357,6 +427,34 @@
   function isDownloading(url: string | null | undefined): boolean {
     return Boolean(url && downloadingUrls.includes(url));
   }
+
+  function getAmazonCheck(result: SearchResult): AmazonCheckScore {
+    if (amazonCheckStatus === 'loading') {
+      return createPendingAmazonCheck();
+    }
+
+    if (amazonCheckStatus === 'ready') {
+      return scoreAmazonMatch(result, amazonReferenceBook);
+    }
+
+    return {
+      status: 'unavailable',
+      score: null,
+      label: 'Amazon Check',
+      reasons: [amazonCheckError || 'Amazon ainda não consultada']
+    };
+  }
+
+  function getAmazonCheckStyle(check: AmazonCheckScore): string {
+    const score = check.score ?? 0;
+    const hue = Math.round(2 + (Math.max(0, Math.min(score, 100)) / 100) * 136);
+    return `--amazon-check-hue:${hue}; --amazon-check-fill:${score}%;`;
+  }
+
+  function getAmazonCheckTitle(check: AmazonCheckScore): string {
+    const score = check.score === null ? 'pendente' : `${check.score}/100`;
+    return `${check.label}: ${score}${check.reasons.length ? ` · ${check.reasons.join(', ')}` : ''}`;
+  }
 </script>
 
 <svelte:head>
@@ -422,7 +520,7 @@
           checked={settings.searchMode === 'focused'}
           on:change={() => handleSearchModeChange('focused')}
         />
-        <span>Novo buscador</span>
+        <span>Anna's Archive</span>
       </label>
     </div>
 
@@ -556,37 +654,74 @@
         {#if sortedResults.length}
           {#each sortedResults as result, index}
             {@const badge = getBadge(result)}
+            {@const amazonCheck = getAmazonCheck(result)}
             <article class="result-item" style={`--delay:${index}`}>
-              <div class="result-eyebrow">
-                <span class={`result-chip ${badge.className}`}>{badge.label}</span>
-                <span class="result-chip muted">{result.source}</span>
-                {#if result.materialType && result.materialType !== 'unknown'}
-                  <span class="result-chip muted">
-                    {formatMaterialTypeLabel(result.materialType)}
-                  </span>
+              <div
+                class={`amazon-check ${amazonCheck.status}`}
+                style={getAmazonCheckStyle(amazonCheck)}
+                title={getAmazonCheckTitle(amazonCheck)}
+                aria-label={getAmazonCheckTitle(amazonCheck)}
+              >
+                <span class="amazon-check-label">{amazonCheck.label}</span>
+                <span class="amazon-check-score">
+                  {amazonCheck.score === null ? '--' : amazonCheck.score}
+                </span>
+              </div>
+
+              <div class="result-body">
+                {#if result.coverUrl}
+                  <a
+                    class="result-cover"
+                    href={result.pageUrl || result.pdfUrl || result.epubUrl || result.coverUrl}
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    <img
+                      src={result.coverUrl}
+                      alt={`Capa de ${result.title || 'resultado'}`}
+                      loading="lazy"
+                      referrerpolicy="no-referrer"
+                      on:error={(event) => {
+                        const img = event.currentTarget as HTMLImageElement;
+                        img.parentElement?.classList.add('is-broken');
+                      }}
+                    />
+                  </a>
                 {/if}
+
+                <div class="result-main">
+                  <div class="result-eyebrow">
+                    <span class={`result-chip ${badge.className}`}>{badge.label}</span>
+                    <span class="result-chip muted">{result.source}</span>
+                    {#if result.materialType && result.materialType !== 'unknown'}
+                      <span class="result-chip muted">
+                        {formatMaterialTypeLabel(result.materialType)}
+                      </span>
+                    {/if}
+                  </div>
+
+                  <h3 class="result-title">{result.title || 'Sem título'}</h3>
+
+                  {#if result.author || result.year}
+                    <p class="result-meta">
+                      {#if result.author}{result.author}{/if}
+                      {#if result.author && result.year} · {/if}
+                      {#if result.year}<span class="mono">{String(result.year)}</span>{/if}
+                    </p>
+                  {/if}
+
+                  <div class="confidence-bar">
+                    <div
+                      class="confidence-fill"
+                      style={`width:${Math.round((result.confidence || 0) * 100)}%`}
+                    ></div>
+                  </div>
+
+                  {#if result.pdfStatusReason}
+                    <p class="subnote">{result.pdfStatusReason}</p>
+                  {/if}
+                </div>
               </div>
-
-              <h3 class="result-title">{result.title || 'Sem título'}</h3>
-
-              {#if result.author || result.year}
-                <p class="result-meta">
-                  {#if result.author}{result.author}{/if}
-                  {#if result.author && result.year} · {/if}
-                  {#if result.year}<span class="mono">{String(result.year)}</span>{/if}
-                </p>
-              {/if}
-
-              <div class="confidence-bar">
-                <div
-                  class="confidence-fill"
-                  style={`width:${Math.round((result.confidence || 0) * 100)}%`}
-                ></div>
-              </div>
-
-              {#if result.pdfStatusReason}
-                <p class="subnote">{result.pdfStatusReason}</p>
-              {/if}
 
               <div class="action-stack">
                 {#if result.pdfUrl}
