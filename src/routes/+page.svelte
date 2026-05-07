@@ -156,6 +156,10 @@
     amazonCheckError = '';
   }
 
+  function isGitHubPagesHost(): boolean {
+    return typeof window !== 'undefined' && window.location.hostname.endsWith('github.io');
+  }
+
   function getAmazonCheckCacheSnapshot(): {
     amazonReferenceBook: AmazonBook | null;
     amazonCheckStatus: CachedAmazonCheckStatus;
@@ -183,8 +187,12 @@
     try {
       const response = await scrapeAmazonBookFromSearch(amazonQuery || rawInput, {
         marketplace: 'com.br',
-        fetcher: createAmazonHtmlEndpointFetcher(fetch),
-        proxyChain: [],
+        ...(isGitHubPagesHost()
+          ? {}
+          : {
+              fetcher: createAmazonHtmlEndpointFetcher(fetch),
+              proxyChain: []
+            }),
         maxCandidates: 8,
         includeSponsored: false,
         timeoutMs: 12000,
