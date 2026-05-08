@@ -13,6 +13,19 @@ export function normalizeWhitespace(value: string | null | undefined): string {
     .trim();
 }
 
+export function upgradeHttpUrl(value: string | null | undefined): string | null {
+  const clean = normalizeWhitespace(value);
+  if (!clean) {
+    return null;
+  }
+
+  if (clean.startsWith('http://')) {
+    return `https://${clean.slice('http://'.length)}`;
+  }
+
+  return clean;
+}
+
 export function stripDiacritics(value: string | null | undefined): string {
   return normalizeWhitespace(value)
     .normalize('NFD')

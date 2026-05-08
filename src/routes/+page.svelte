@@ -44,7 +44,12 @@
     SearchSettings,
     SourceStatusEntry
   } from '$lib/types';
-  import { formatMaterialTypeLabel, getSearchProgress, normalizeWhitespace } from '$lib/utils';
+  import {
+    formatMaterialTypeLabel,
+    getSearchProgress,
+    normalizeWhitespace,
+    upgradeHttpUrl
+  } from '$lib/utils';
 
   let rawInput = '';
   let parsedCitation: ParsedCitation | null = null;
@@ -184,15 +189,17 @@
     amazonCheckStatus = 'loading';
     amazonCheckError = '';
 
+    if (isGitHubPagesHost()) {
+      amazonCheckStatus = 'error';
+      amazonCheckError = 'Amazon Check indisponível no GitHub Pages sem proxy server-side.';
+      return getAmazonCheckCacheSnapshot();
+    }
+
     try {
       const response = await scrapeAmazonBookFromSearch(amazonQuery || rawInput, {
         marketplace: 'com.br',
-        ...(isGitHubPagesHost()
-          ? {}
-          : {
-              fetcher: createAmazonHtmlEndpointFetcher(fetch),
-              proxyChain: []
-            }),
+        fetcher: createAmazonHtmlEndpointFetcher(fetch),
+        proxyChain: [],
         maxCandidates: 8,
         includeSponsored: false,
         timeoutMs: 12000,
@@ -746,6 +753,7 @@
           {#each sortedResults as result, index}
             {@const badge = getBadge(result)}
             {@const amazonCheck = getAmazonCheck(result)}
+            {@const coverUrl = upgradeHttpUrl(result.coverUrl)}
             <article class="result-item" style={`--delay:${index}`}>
               <div
                 class={`amazon-check ${amazonCheck.status}`}
@@ -760,15 +768,15 @@
               </div>
 
               <div class="result-body">
-                {#if result.coverUrl}
+                {#if coverUrl}
                   <a
                     class="result-cover"
-                    href={result.pageUrl || result.pdfUrl || result.epubUrl || result.coverUrl}
+                    href={result.pageUrl || result.pdfUrl || result.epubUrl || coverUrl}
                     target="_blank"
                     rel="noopener"
                   >
                     <img
-                      src={result.coverUrl}
+                      src={coverUrl}
                       alt={`Capa de ${result.title || 'resultado'}`}
                       loading="lazy"
                       referrerpolicy="no-referrer"
