@@ -1,4 +1,8 @@
 <script lang="ts">
+  import Archive from 'phosphor-svelte/lib/Archive';
+  import Eraser from 'phosphor-svelte/lib/Eraser';
+  import MagnifyingGlass from 'phosphor-svelte/lib/MagnifyingGlass';
+  import Question from 'phosphor-svelte/lib/Question';
   import { onMount } from 'svelte';
   import '../app.css';
   import { DEFAULT_SETTINGS } from '$lib/constants';
@@ -480,16 +484,6 @@
           : 'error';
   }
 
-  function getSourceChipSymbol(entry: SourceStatusEntry): string {
-    return entry.status === 'done'
-      ? '●'
-      : entry.status === 'loading'
-        ? '⟳'
-        : entry.status === 'empty'
-          ? '○'
-          : '✗';
-  }
-
   function getSourceChipLabel(sourceId: string, entry: SourceStatusEntry): string {
     const remaining = getRateLimitRemaining(rateLimits, sourceId);
     return remaining ? `${entry.label} (${remaining}s)` : entry.label;
@@ -534,7 +528,7 @@
 
   function getAmazonCheckStyle(check: AmazonCheckScore): string {
     const score = check.score ?? 0;
-    const hue = Math.round(2 + (Math.max(0, Math.min(score, 100)) / 100) * 136);
+    const hue = Math.round(23 + (Math.max(0, Math.min(score, 100)) / 100) * 21);
     return `--amazon-check-hue:${hue}; --amazon-check-fill:${score}%;`;
   }
 
@@ -558,14 +552,18 @@
       </p>
     </div>
     <button class="help-btn" type="button" aria-label="Ajuda e instruções" on:click={openHelp}>
-      ?
+      <Question size={19} weight="bold" aria-hidden="true" />
     </button>
   </header>
 
   <section class="catalog-card" aria-labelledby="catalogTitle">
     <div class="card-head">
       <div>
-        <h2 id="catalogTitle" class="catalog-title">Catálogo de referência</h2>
+        <p class="command-kicker">
+          <Archive size={16} weight="bold" aria-hidden="true" />
+          Consulta central
+        </p>
+        <h2 id="catalogTitle" class="catalog-title">Biblioteca de busca</h2>
         <div class="catalog-meta">
           <span class="catalog-dot" aria-hidden="true"></span>
           <span>Parser ABNT</span>
@@ -614,10 +612,10 @@
     <div class="action-row">
       <button
         class:is-loading={isSearching}
-        class="primary-btn"
+        class="primary-btn search-primary-btn"
         type="button"
         disabled={isSearching || !normalizeWhitespace(rawInput)}
-        style={`--search-progress: ${searchProgressValue};`}
+        style={`--search-progress: ${searchProgressValue / 100};`}
         on:click={handleSearch}
       >
         <span class="search-btn-content">
@@ -628,11 +626,15 @@
               <span class="search-btn-meta">{progress.remaining} restantes · {progress.found} título(s)</span>
             </span>
           {:else}
+            <MagnifyingGlass size={18} weight="bold" aria-hidden="true" />
             <span class="search-btn-label">Buscar PDFs / EPUBs</span>
           {/if}
         </span>
       </button>
-      <button class="ghost-btn" type="button" on:click={handleClear}>Limpar</button>
+      <button class="ghost-btn" type="button" on:click={handleClear}>
+        <Eraser size={17} weight="bold" aria-hidden="true" />
+        <span>Limpar</span>
+      </button>
     </div>
 
     <label class="check-row search-cache-row" for="useCachedSearch">
@@ -735,7 +737,7 @@
     <div class="source-status" aria-live="polite">
       {#each sourceEntries as entry}
         <span class={`source-chip ${getSourceChipClass(entry)}`}>
-          {getSourceChipSymbol(entry)} {getSourceChipLabel(entry.sourceId, entry)}
+          {getSourceChipLabel(entry.sourceId, entry)}
         </span>
       {/each}
     </div>
@@ -812,7 +814,7 @@
                   <div class="confidence-bar">
                     <div
                       class="confidence-fill"
-                      style={`width:${Math.round((result.confidence || 0) * 100)}%`}
+                      style={`--confidence:${Math.max(0, Math.min(result.confidence || 0, 1))};`}
                     ></div>
                   </div>
 
@@ -830,7 +832,7 @@
                     disabled={isDownloading(result.pdfUrl)}
                     on:click={() => handleDownload(result)}
                   >
-                    {isDownloading(result.pdfUrl) ? '↓ Baixando...' : '↓ Baixar PDF'}
+                    {isDownloading(result.pdfUrl) ? 'Baixando...' : 'Baixar PDF'}
                   </button>
                 {/if}
 
@@ -842,11 +844,11 @@
                     on:click={() => handleEpubDownload(result)}
                   >
                     {#if isDownloading(result.epubUrl)}
-                      ↓ Processando...
+                      Processando...
                     {:else if settings.convertEpubToPdfByDefault}
-                      ↓ EPUB -> PDF
+                      EPUB -> PDF
                     {:else}
-                      ↓ Baixar EPUB
+                      Baixar EPUB
                     {/if}
                   </button>
                 {/if}
